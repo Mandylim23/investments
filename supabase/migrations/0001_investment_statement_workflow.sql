@@ -3,6 +3,7 @@ create extension if not exists pgcrypto;
 create table if not exists public.statement_imports (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
   file_name text not null,
   file_hash text not null,
   statement_period_start date,
@@ -17,10 +18,11 @@ create table if not exists public.statement_imports (
   notes text
 );
 
-create unique index if not exists statement_imports_file_hash_uidx on public.statement_imports(file_hash);
+create unique index if not exists statement_imports_owner_file_hash_uidx on public.statement_imports(owner_id,file_hash);
 
 create table if not exists public.statement_transactions (
   id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
   import_id uuid not null references public.statement_imports(id) on delete cascade,
   txn_date date not null,
   description text not null,
@@ -47,6 +49,7 @@ create index if not exists statement_transactions_import_date_idx on public.stat
 
 create table if not exists public.monthly_reports (
   id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
   import_id uuid not null references public.statement_imports(id) on delete cascade,
   period_start date not null,
   period_end date not null,
@@ -66,11 +69,13 @@ alter table public.statement_imports enable row level security;
 alter table public.statement_transactions enable row level security;
 alter table public.monthly_reports enable row level security;
 
-drop policy if exists "statement_imports_demo_access" on public.statement_imports;
-create policy "statement_imports_demo_access" on public.statement_imports for all to anon,authenticated using (true) with check (true);
-drop policy if exists "statement_transactions_demo_access" on public.statement_transactions;
-create policy "statement_transactions_demo_access" on public.statement_transactions for all to anon,authenticated using (true) with check (true);
-drop policy if exists "monthly_reports_demo_access" on public.monthly_reports;
-create policy "monthly_reports_demo_access" on public.monthly_reports for all to anon,authenticated using (true) with check (true);
+create policy statement_imports_owner_access on public.statement_imports for all to authenticated
+  using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
+create policy statement_transactions_owner_access on public.statement_transactions for all to authenticated
+  using (owner_id = (select auth.uid()) and exists(select 1 from public.statement_imports i where i.id=import_id and i.owner_id=(select auth.uid())))
+  with check (owner_id = (select auth.uid()) and exists(select 1 from public.statement_imports i where i.id=import_id and i.owner_id=(select auth.uid())));
+create policy monthly_reports_owner_access on public.monthly_reports for all to authenticated
+  using (owner_id = (select auth.uid()) and exists(select 1 from public.statement_imports i where i.id=import_id and i.owner_id=(select auth.uid())))
+  with check (owner_id = (select auth.uid()) and exists(select 1 from public.statement_imports i where i.id=import_id and i.owner_id=(select auth.uid())));
 
-grant select,insert,update,delete on public.statement_imports,public.statement_transactions,public.monthly_reports to anon,authenticated;
+grant select,insert,update,delete on public.statement_imports,public.statement_transactions,public.monthly_reports to authenticated;
