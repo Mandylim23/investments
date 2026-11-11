@@ -23,24 +23,21 @@ function parseDate(value: string): string | null {
   if((m=s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/))){const month=new Date(`${m[2]} 1, 2000`).getMonth();if(month<0)return null;return `${m[3]}-${String(month+1).padStart(2,"0")}-${String(Number(m[1])).padStart(2,"0")}`}
   const d=new Date(s);return Number.isNaN(d.getTime())?null:d.toISOString().slice(0,10);
 }
-function classify(description:string){const d=description.toLowerCase();if(/interest|coupon/.test(d))return {transaction_type:"interest",category:"income"};if(/dividend|distribution/.test(d))return {transaction_type:"dividend",category:"income"};if(/fee|charge|commission/.test(d))return {transaction_type:"fee",category:"expense"};if(/buy|purchase|subscribe|subscription|allotment/.test(d))return {transaction_type:"buy",category:"investment"};if(/sell|sale|redeem|redemption|maturity|disposal/.test(d))return {transaction_type:"sale",category:"investment"};if(/transfer|sweep/.test(d))return {transaction_type:"transfer",category:"transfer"};return {transaction_type:"cash",category:"unreviewed"}}
 function extractRows(text:string){
  const output=[] as Record<string,unknown>[],seen=new Set<string>();
  const lines=text.replace(/\r/g,"").split("\n").map(s=>s.replace(/\s+/g," ").trim()).filter(Boolean);
  const datePattern=/\b(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g;
  const moneyPattern=/\(?-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2,6})?\)?(?:\s*(?:CR|DR))?/g;
- for(const [index,line] of lines.entries()){
+ for(const line of lines){
   const dateMatches=[...line.matchAll(datePattern)];for(let dateIndex=0;dateIndex<dateMatches.length;dateIndex++){const dm=dateMatches[dateIndex];
    const txnDate=parseDate(dm[0]);if(!txnDate)continue;
    const rest=line.slice((dm.index??0)+dm[0].length,dateMatches[dateIndex+1]?.index??line.length);const matches=[...rest.matchAll(moneyPattern)];if(!matches.length)continue;
-   const shareMatch=rest.match(/\b(\d+(?:,\d{3})*(?:\.\d+)?)\s+(?:shares?|units?)\b/i),unitMatch=rest.match(/\b(?:at|@)\s*\$?\s*(\d+(?:\.\d+)?)\b/i);
    const valueStart=matches.length>=2?(matches.at(-2)?.index??0):(matches[0].index??0);
    const detail=rest.slice(0,valueStart);const description=detail.replace(/\b\d+(?:,\d{3})*(?:\.\d+)?\s+(?:shares?|units?)\b/ig,"").replace(/\b(?:at|@)\s*\$?\s*\d+(?:\.\d+)?/ig,"").replace(/^[\s|,:;-]+|[\s|,:;-]+$/g,"").trim()||"Statement entry";
    const vals=matches.slice(matches.length>=2?-2:0).map(m=>parseMoney(m[0])).filter((v):v is number=>v!==null);if(!vals.length)continue;
    const key=`${txnDate}|${description}|${vals.join("|")}`;if(seen.has(key))continue;seen.add(key);
-   const amount=vals.length>=2?vals[0]:vals[0],balance=vals.length>=2?vals[1]:null;
-   const type=classify(description),security=description.match(/(?:^|\s)([A-Z]{2,6}(?:\.[A-Z]{1,3})?)(?:\s|$)/)?.[1]??null;
-   output.push({txn_date:txnDate,description,reference:null,...type,asset_class:/bond|note|coupon|maturity/i.test(description)?"bond":/private equity/i.test(description)?"private_equity":/fund|equity|share|stock/i.test(description)?"equity":null,security_name:security?description.replace(security,"").trim():null,ticker:security,units:shareMatch?Number(shareMatch[1].replaceAll(",","")):null,unit_price:unitMatch?Number(unitMatch[1]):null,accrued_interest:0,amount,balance,cost_value:null,market_value:null,unrealized_pnl:null,confidence:vals.length>=2?.7:.45,is_reviewed:false});
+   const amount=vals[0];
+   output.push({txn_date:txnDate,description,amount});
   }
  } return output;
 }
