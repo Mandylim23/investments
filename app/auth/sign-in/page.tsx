@@ -4,6 +4,12 @@ import { FormEvent, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 const CONFIRMATION_REDIRECT = "https://investments-five-self.vercel.app/auth/callback?next=/";
+const ALLOWED_EMAIL_DOMAIN = "selangorproperties.com.my";
+
+function isAllowedEmail(value: string) {
+  const parts = value.trim().toLowerCase().split("@");
+  return parts.length === 2 && parts[0].length > 0 && parts[1] === ALLOWED_EMAIL_DOMAIN;
+}
 
 export default function SignInPage() {
   const supabase = useMemo(() => createClient(), []);
@@ -23,6 +29,9 @@ export default function SignInPage() {
     setShowResend(false);
     try {
       if (mode === "signup") {
+        if (!isAllowedEmail(email)) {
+          throw new Error(`Only @${ALLOWED_EMAIL_DOMAIN} email addresses can create an account.`);
+        }
         const { error: authError } = await supabase.auth.signUp({
           email,
           password,
@@ -46,6 +55,10 @@ export default function SignInPage() {
   }
 
   async function resendConfirmation() {
+    if (!isAllowedEmail(email)) {
+      setError(`Only @${ALLOWED_EMAIL_DOMAIN} email addresses can create an account.`);
+      return;
+    }
     setBusy(true);
     setError("");
     setMessage("");
@@ -78,6 +91,7 @@ export default function SignInPage() {
         {message && <div className="alert success"><b>✓</b><span>{message}</span></div>}
         <form onSubmit={submit}>
           <label>Email address<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
+          {mode === "signup" && <p className="auth-intro">Account creation is limited to @{ALLOWED_EMAIL_DOMAIN} email addresses.</p>}
           <label>Password<input type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} required value={password} onChange={event => setPassword(event.target.value)} /></label>
           <button className="button primary wide" disabled={busy}>{busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}</button>
         </form>
