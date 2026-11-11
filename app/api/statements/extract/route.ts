@@ -39,7 +39,7 @@ function extractRows(text:string){
    const key=`${txnDate}|${description}|${vals.join("|")}`;if(seen.has(key))continue;seen.add(key);
    const amount=vals.length>=2?vals[0]:vals[0],balance=vals.length>=2?vals[1]:null;
    const type=classify(description),security=description.match(/(?:^|\s)([A-Z]{2,6}(?:\.[A-Z]{1,3})?)(?:\s|$)/)?.[1]??null;
-   output.push({id:`row-${index}-${createHash("sha1").update(key).digest("hex").slice(0,8)}`,import_id:"pending",txn_date:txnDate,description,reference:null,...type,asset_class:/bond|note|coupon|maturity/i.test(description)?"bond":/private equity/i.test(description)?"private_equity":/fund|equity|share|stock/i.test(description)?"equity":null,security_name:security?description.replace(security,"").trim():null,ticker:security,units:shareMatch?Number(shareMatch[1].replaceAll(",","")):null,unit_price:unitMatch?Number(unitMatch[1]):null,accrued_interest:0,amount,balance,cost_value:null,market_value:null,unrealized_pnl:null,confidence:vals.length>=2?.7:.45,is_reviewed:false});
+   output.push({txn_date:txnDate,description,reference:null,...type,asset_class:/bond|note|coupon|maturity/i.test(description)?"bond":/private equity/i.test(description)?"private_equity":/fund|equity|share|stock/i.test(description)?"equity":null,security_name:security?description.replace(security,"").trim():null,ticker:security,units:shareMatch?Number(shareMatch[1].replaceAll(",","")):null,unit_price:unitMatch?Number(unitMatch[1]):null,accrued_interest:0,amount,balance,cost_value:null,market_value:null,unrealized_pnl:null,confidence:vals.length>=2?.7:.45,is_reviewed:false});
   }
  } return output;
 }
@@ -54,6 +54,6 @@ export async function POST(request:Request){
   if(text.trim().length<20)return NextResponse.json({error:"No readable text was found. This PDF may be scanned; OCR is not yet available."},{status:422});
   const transactions=extractRows(text);if(!transactions.length)return NextResponse.json({error:"The PDF text was readable, but no dated transaction rows were detected. Download a searchable PDF or enter rows manually."},{status:422});
   const dates=transactions.map(x=>String(x.txn_date)).sort();const periodMatch=text.match(/(?:statement period|period|from)\s*[:]?\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i);
-  return NextResponse.json({transactions,period_start:periodMatch?parseDate(periodMatch[1]):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):dates.at(-1),currency_code:/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":"USD",pages:transactions.length,source_text:text.slice(0,100000)});
+  return NextResponse.json({transactions,period_start:periodMatch?parseDate(periodMatch[1]):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):dates.at(-1),currency_code:/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":"USD",pages:transactions.length});
  }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Unexpected PDF extraction error."},{status:500})}
 }
