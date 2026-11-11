@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
+import "pdfjs-dist/legacy/build/pdf.worker.mjs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
