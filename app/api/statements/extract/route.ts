@@ -89,16 +89,24 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   }
   return null;
  };
+ const columnXs=(items:LayoutItem[],pattern:RegExp):number[]=>{
+  const found:number[]=[];
+  for(let i=0;i<items.length;i++){
+   if(pattern.test(items[i].text))found.push(items[i].x);
+   if(i+1<items.length&&pattern.test(`${items[i].text} ${items[i+1].text}`))found.push(items[i].x);
+  }
+  return [...new Set(found)].sort((a,b)=>a-b);
+ };
  const moneyPattern=/\(?-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2,6})?\)?(?:\s*(?:CR|DR))?/g;
  const datePattern=/\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g;
  let activeCurrency:string|null=null;
  for(const lines of pages){
-  let headerIndex=-1,dateX:number|null=null,orderX:number|null=null,descriptionX:number|null=null,amountX:number|null=null,currencyX:number|null=null,debitX:number|null=null,creditX:number|null=null,balanceX:number|null=null;
+  let headerIndex=-1,dateX:number|null=null,orderX:number|null=null,descriptionX:number|null=null,amountX:number|null=null,currencyX:number|null=null,debitX:number|null=null,creditX:number|null=null,balanceX:number|null=null,forexX:number|null=null,baseAmountX:number|null=null,baseDebitX:number|null=null,baseCreditX:number|null=null,baseBalanceX:number|null=null;
   for(let i=0;i<lines.length;i++){
    const labels=textOf(lines[i]).toLowerCase();
    const hasDate=/\b(?:value|transaction|posting|booking|entry|effective)?\s*date\b/.test(labels),hasDescription=/\b(?:description|details|narrative|particulars|remarks|reference)\b/.test(labels),hasAmount=/\b(?:amount|debit|credit|withdrawal|deposit|balance|paid\s+in|paid\s+out)\b/.test(labels);
    if(hasDescription&&hasDate&&hasAmount){
-    headerIndex=i;const items=lines[i].items;dateX=columnX(items,/^(?:(?:value|transaction|posting|booking|entry|effective)\s*)?date$/i);orderX=columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);amountX=columnX(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit)$/i);currencyX=columnX(items,/^currency(?:\s+code)?$/i);debitX=columnX(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i);creditX=columnX(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i);balanceX=columnX(items,/^(?:(?:running|closing|current)\s+)?balance$/i);break;
+    headerIndex=i;const items=lines[i].items;dateX=columnX(items,/^(?:(?:value|transaction|posting|booking|entry|effective)\s*)?date$/i);orderX=columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);const amounts=columnXs(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit)$/i),currencies=columnXs(items,/^currency(?:\s+code)?$/i),debits=columnXs(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i),credits=columnXs(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i),balancesFound=columnXs(items,/^(?:(?:running|closing|current)\s+)?balance$/i);amountX=amounts[0]??null;baseAmountX=amounts[1]??null;currencyX=currencies[0]??null;debitX=debits[0]??null;baseDebitX=debits[1]??null;creditX=credits[0]??null;baseCreditX=credits[1]??null;balanceX=balancesFound[0]??null;baseBalanceX=balancesFound[1]??null;forexX=columnX(items,/^(?:forex|fx(?:\s+rate)?|exchange\s+rate)$/i);break;
    }
   }
   if(headerIndex<0)continue;
@@ -108,7 +116,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   for(const line of lines.slice(headerIndex+1)){
    const rowText=textOf(line);if(!rowText)continue;
    const subtitleCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
-   const sortedX=[currencyX,debitX,creditX,balanceX,amountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b)[0];
+   const sortedX=[currencyX,debitX,creditX,balanceX,amountX,forexX,baseDebitX,baseCreditX,baseBalanceX,baseAmountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b)[0];
    const descEnd=sortedX??(line.items.at(-1)?.x??descriptionX+500)+1;
    const valueEnd=orderX!==null&&orderX>dateX?orderX:descriptionX;
    const dateText=line.items.filter(item=>item.x>=dateX!-3&&item.x<valueEnd-2).map(item=>item.text).join(" ").trim();
@@ -117,7 +125,12 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    const amountText=columnAmount(amountX,null);
    const debitText=columnAmount(debitX,creditX??balanceX);
    const creditText=columnAmount(creditX,balanceX);
-   const balanceText=columnAmount(balanceX,null);
+   const balanceText=columnAmount(balanceX,forexX??baseDebitX??baseCreditX??baseBalanceX??baseAmountX);
+   const forexText=columnAmount(forexX,baseDebitX??baseCreditX??baseBalanceX??baseAmountX);
+   const baseDebitText=columnAmount(baseDebitX,baseCreditX??baseBalanceX);
+   const baseCreditText=columnAmount(baseCreditX,baseBalanceX);
+   const baseBalanceText=columnAmount(baseBalanceX,baseAmountX);
+   const baseAmountText=columnAmount(baseAmountX,null);
    const currencyText=columnAmount(currencyX,debitX??creditX??balanceX);
    let description=descriptionItems.map(item=>item.text).join(" ").replace(/\s+/g," ").trim();
    if(!description){
@@ -139,15 +152,21 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    }
    if(debitX!==null||creditX!==null){if(!debit&&!credit&&!(isOpening||isCarried))continue;amount=debit-credit}
    let balance=balanceText?parseMoney([...balanceText.matchAll(moneyPattern)].at(-1)?.[0]):null;
+   const exchangeRate=forexText?parseMoney([...forexText.matchAll(moneyPattern)].at(-1)?.[0]):null;
+   let baseDebit=baseDebitText?Math.abs(parseMoney([...baseDebitText.matchAll(moneyPattern)].at(-1)?.[0])??0):null;
+   let baseCredit=baseCreditText?Math.abs(parseMoney([...baseCreditText.matchAll(moneyPattern)].at(-1)?.[0])??0):null;
+   let baseBalance=baseBalanceText?parseMoney([...baseBalanceText.matchAll(moneyPattern)].at(-1)?.[0]):null;
+   const baseAmount=baseAmountText?parseMoney([...baseAmountText.matchAll(moneyPattern)].at(-1)?.[0]):null;
+   if(baseAmount!==null){if(isOpening||isCarried)baseBalance=baseAmount;else if(amount!==null&&amount<0)baseCredit=Math.abs(baseAmount);else baseDebit=Math.abs(baseAmount)}
    if((isOpening||isCarried)&&!debit&&!credit&&balance!==null)amount=balance;
    if(amount===null)continue;
    if(isOpening||isCarried){balance??=amount;debit=0;credit=0}
    if(!(isOpening||isCarried)&&!debit&&!credit){if(amount>0)debit=amount;else if(amount<0)credit=Math.abs(amount)}
    const rowCurrency=currencyText?.match(/\b[A-Z]{3}\b/)?.[0]??activeCurrency;
    if(isOpening||isCarried){
-    allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,category:"cash",_balanceKind:isOpening?"opening":"carried"});
+    allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:"cash",_balanceKind:isOpening?"opening":"carried"});
    }else if(valueDate&&description){
-    allRows.push({txn_date:valueDate,description,amount,debit,credit,balance,currency_code:rowCurrency,category:categoryFor(description)});
+    allRows.push({txn_date:valueDate,description,amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:categoryFor(description)});
    }
   }
  }
