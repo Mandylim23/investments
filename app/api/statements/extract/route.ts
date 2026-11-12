@@ -45,7 +45,7 @@ function categoryFor(description:string){
  if(/\b(fee|charged|charge|commission|tax|levy|stamp duty)\b/.test(value))return "expense";
  if(/\b(dividend|interest|coupon|distribution|income)\b/.test(value))return "income";
  if(/\b(transfer|remittance|withdrawal|deposit|payment received|payment sent)\b/.test(value))return "transfer";
- if(/\b(capital call|subscription|purchase|buy|sale|sell|redemption|investment)\b/.test(value))return "investment";
+ if(/\b(capital call|call notice|subscription|purchase|buy|sale|sell|redemption|investment|fixed deposit|matured)\b/.test(value))return "investment";
  return "unreviewed";
 }
 function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
@@ -60,6 +60,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
  };
  const moneyPattern=/\(?-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2,6})?\)?(?:\s*(?:CR|DR))?/g;
  const datePattern=/\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g;
+ let activeCurrency:string|null=null;
  for(const lines of pages){
   let headerIndex=-1,dateX:number|null=null,orderX:number|null=null,descriptionX:number|null=null,amountX:number|null=null,currencyX:number|null=null,debitX:number|null=null,creditX:number|null=null,balanceX:number|null=null;
   for(let i=0;i<lines.length;i++){
@@ -70,9 +71,11 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   }
   if(headerIndex<0)continue;
   foundHeader=true;
+  for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/\bcash\s+accounts?\s+([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
   if(dateX===null||descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
   for(const line of lines.slice(headerIndex+1)){
    const rowText=textOf(line);if(!rowText)continue;
+   const subtitleCurrency=rowText.match(/\bcash\s+accounts?\s+([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
    const sortedX=[currencyX,debitX,creditX,balanceX,amountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b)[0];
    const descEnd=sortedX??(line.items.at(-1)?.x??descriptionX+500)+1;
    const valueEnd=orderX!==null&&orderX>dateX?orderX:descriptionX;
@@ -108,7 +111,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    if(amount===null)continue;
    if(isOpening||isCarried){balance??=amount;debit=0;credit=0}
    if(!(isOpening||isCarried)&&!debit&&!credit){if(amount>0)debit=amount;else if(amount<0)credit=Math.abs(amount)}
-   const rowCurrency=currencyText?.match(/\b[A-Z]{3}\b/)?.[0]??null;
+   const rowCurrency=currencyText?.match(/\b[A-Z]{3}\b/)?.[0]??activeCurrency;
    if(isOpening||isCarried){
     allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,category:"cash",_balanceKind:isOpening?"opening":"carried"});
    }else if(valueDate&&description){
@@ -122,6 +125,12 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
  if(carried&&(!carried.txn_date||carried.txn_date==="")&&datedTransactions.length){const lastDate=datedTransactions.at(-1)!;carried.txn_date=new Date(Date.UTC(Number(lastDate.slice(0,4)),Number(lastDate.slice(5,7)),0)).toISOString().slice(0,10)}
  const opening=allRows.find(row=>row._balanceKind==="opening");
  if(opening&&(!opening.txn_date||opening.txn_date==="")){const carriedDate=typeof carried?.txn_date==="string"&&carried.txn_date?carried.txn_date:null;const firstDate=datedTransactions[0];const inferred=carriedDate?previousMonthEnd(carriedDate):firstDate?previousMonthEnd(firstDate):null;if(inferred)opening.txn_date=inferred}
+ const balances=new Map<string,number>();
+ for(const row of allRows){const code=typeof row.currency_code==="string"?row.currency_code:"USD";const sourceBalance=typeof row.balance==="number"?row.balance:null;
+  if(row._balanceKind==="opening"){balances.set(code,sourceBalance??Number(row.amount));continue}
+  if(row._balanceKind==="carried"){const ending=sourceBalance??balances.get(code)??Number(row.amount);row.balance=ending;balances.set(code,ending);continue}
+  const prior=balances.get(code);if(prior!==undefined){const calculated=Math.round((prior+Number(row.amount))*100)/100;row.balance=sourceBalance??calculated;balances.set(code,row.balance as number)}
+ }
  return allRows.map(({_balanceKind,...row})=>row);
 }
 function extractRows(text:string,pages:LayoutLine[][]=[]){
@@ -155,9 +164,10 @@ export async function POST(request:Request){
   try{const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");const worker=new pdfjs.PDFWorker();await worker.promise;const doc=await pdfjs.getDocument({data:new Uint8Array(bytes),useSystemFonts:true,disableFontFace:true,isEvalSupported:false,worker}).promise;const pages:string[]=[];for(let i=1;i<=doc.numPages;i++){const page=await doc.getPage(i),content=await page.getTextContent();pages.push(content.items.map((item)=>("str" in item?item.str:"")).join(" "));layout.push(layoutLines(content.items))}text=pages.join("\n")}catch(e){return NextResponse.json({error:`Could not read the PDF text layer. It may be a scanned image; OCR is not yet available. ${e instanceof Error?e.message:""}`},{status:422})}
   if(text.trim().length<20)return NextResponse.json({error:"No readable text was found. This PDF may be scanned; OCR is not yet available."},{status:422});
   const transactions=extractRows(text,layout);if(!transactions.length)return NextResponse.json({error:"The PDF text was readable, but no transaction or balance rows were detected. Download a searchable PDF or enter rows manually."},{status:422});
-  const dates=transactions.map(x=>String(x.txn_date)).sort();const periodMatch=text.match(/(?:statement period|period|from)\s*[:]?\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i);const brought=transactions.find(x=>x.description==="Balance brought forward"),carried=transactions.find(x=>x.description==="Balance carried forward");
-  const currencyCode=/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":"USD";
+  const dates=transactions.map(x=>String(x.txn_date)).filter(Boolean).sort();const periodMatch=text.match(/(?:statement period|period|from)\s*[:]?\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i);const brought=transactions.find(x=>x.description==="Balance brought forward"),carried=transactions.find(x=>x.description==="Balance carried forward");
+  const sectionCurrency=text.match(/\bCash\s+Accounts?\s+([A-Z]{3})\b/i)?.[1]?.toUpperCase();
+  const currencyCode=sectionCurrency??(/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":/\bAUD\b/i.test(text)?"AUD":/\bSEK\b/i.test(text)?"SEK":/\bUSD\b|US\$\s?\d/i.test(text)?"USD":"USD");
   const normalizedTransactions=transactions.map(row=>({...row,currency_code:row.currency_code??currencyCode}));
-  return NextResponse.json({transactions:normalizedTransactions,period_start:periodMatch?parseDate(periodMatch[1]):brought?nextDay(String(brought.txn_date)):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):carried?String(carried.txn_date):dates.at(-1),currency_code:currencyCode,pages:transactions.length});
+  return NextResponse.json({transactions:normalizedTransactions,period_start:periodMatch?parseDate(periodMatch[1]):brought&&brought.txn_date?nextDay(String(brought.txn_date)):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):carried?.txn_date||dates.at(-1),currency_code:currencyCode,pages:transactions.length});
  }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Unexpected PDF extraction error."},{status:500})}
 }
