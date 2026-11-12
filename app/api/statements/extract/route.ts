@@ -48,6 +48,37 @@ function categoryFor(description:string){
  if(/\b(capital call|call notice|subscription|purchase|buy|sale|sell|redemption|investment|fixed deposit|matured)\b/.test(value))return "investment";
  return "unreviewed";
 }
+function extractCashLayoutRows(pages:LayoutLine[][]):Record<string,unknown>[]{
+ const rows:Record<string,unknown>[]=[];let activeCurrency:string|null=null,inCashSection=false;
+ const moneyPattern=/\(?-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2,6})?\)?(?:\s*(?:CR|DR))?/g;
+ const datePattern=/\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g;
+ for(const lines of pages)for(const line of lines){
+  const rowText=line.items.map(item=>item.text).join(" ").replace(/\s+/g," ").trim();if(!rowText)continue;
+  const sectionCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(sectionCurrency)activeCurrency=sectionCurrency;
+  if(/\bcash\s+(?:transactions?|accounts?|activity|movements?)\b/i.test(rowText))inCashSection=true;
+  if(/\b(?:security|investment|portfolio)\s+(?:transactions?|holdings|activity)\b/i.test(rowText))inCashSection=false;
+  if(!inCashSection)continue;
+  const normalized=rowText.toLowerCase(),isOpening=/\b(opening balance|balance brought forward|brought forward|bal(?:ance)?\s+b\/?f)\b/.test(normalized),isCarried=/\b(month end balance|closing balance|balance carried forward|carried forward|bal(?:ance)?\s+c\/?f)\b/.test(normalized);
+  const dates=[...rowText.matchAll(datePattern)];const parsedDates=dates.map(match=>({value:parseDate(match[0]),index:match.index??0,text:match[0]})).filter((item):item is {value:string;index:number;text:string}=>item.value!==null);
+  const date=parsedDates[0]?.value??null;
+  const parsedDateItems=line.items.filter(item=>new RegExp(datePattern.source).test(item.text));
+  const dateEnd=Math.max(-1,...parsedDateItems.map(item=>item.x));
+  const rightEdge=Math.max(...line.items.map(item=>item.x)),moneyItems=line.items.filter(item=>item.x>Math.max(dateEnd+120,rightEdge-450)&&new RegExp(moneyPattern.source).test(item.text));
+  const moneyValues=moneyItems.flatMap(item=>[...item.text.matchAll(moneyPattern)].map(match=>match[0])).map(value=>parseMoney(value)).filter((value):value is number=>value!==null);
+  if(!moneyValues.length)continue;
+  const balance=moneyValues.length>=2?moneyValues.at(-1)!:(isOpening||isCarried?moneyValues.at(-1)!:null);
+  const amount=(isOpening||isCarried)?balance!:moneyValues.length>=2?moneyValues.at(-2)!:moneyValues[0];
+  const firstMoneyX=moneyItems[0]?.x??Infinity;
+  let description=line.items.filter(item=>item.x>dateEnd+2&&item.x<firstMoneyX-2).map(item=>item.text).join(" ").replace(/\s+/g," ").trim();
+  if(!description){description=rowText;for(const match of dates)description=description.replace(match[0]," ");for(const item of moneyValues)description=description.replace(item.toString()," ");description=description.replace(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*[A-Z]{3}/ig," ").replace(/\s+/g," ").trim()}
+  for(const match of dates)description=description.replace(match[0]," ");
+  if(!description)continue;
+  const txnDate=date??(isOpening||isCarried?parsedDates.at(-1)?.value:null);if(!txnDate&&!isOpening&&!isCarried)continue;
+  const debit=!(isOpening||isCarried)&&amount>0?amount:0,credit=!(isOpening||isCarried)&&amount<0?Math.abs(amount):0;
+  rows.push({txn_date:txnDate??"",description:isOpening?"Balance brought forward":isCarried?"Balance carried forward":description,amount,debit,credit,balance,currency_code:activeCurrency,category:isOpening||isCarried?"cash":categoryFor(description),_balanceKind:isOpening?"opening":isCarried?"carried":undefined});
+ }
+ return rows;
+}
 function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
  const allRows:Record<string,unknown>[]=[];let foundHeader=false;
  const textOf=(line:LayoutLine)=>line.items.map(item=>item.text).join(" ").replace(/\s+/g," ").trim();
@@ -65,17 +96,18 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   let headerIndex=-1,dateX:number|null=null,orderX:number|null=null,descriptionX:number|null=null,amountX:number|null=null,currencyX:number|null=null,debitX:number|null=null,creditX:number|null=null,balanceX:number|null=null;
   for(let i=0;i<lines.length;i++){
    const labels=textOf(lines[i]).toLowerCase();
-   if(/description/.test(labels)&&(/value\s*date/.test(labels)||/\bdate\b/.test(labels))&&(/amount/.test(labels)||/debit/.test(labels)&&/credit/.test(labels))){
-    headerIndex=i;const items=lines[i].items;dateX=columnX(items,/^(?:value\s*)?date$/i);orderX=columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^description$/i);amountX=columnX(items,/^amount$/i);currencyX=columnX(items,/^currency$/i);debitX=columnX(items,/^debit$/i);creditX=columnX(items,/^credit$/i);balanceX=columnX(items,/^balance$/i);break;
+   const hasDate=/\b(?:value|transaction|posting|booking|entry|effective)?\s*date\b/.test(labels),hasDescription=/\b(?:description|details|narrative|particulars|remarks|reference)\b/.test(labels),hasAmount=/\b(?:amount|debit|credit|withdrawal|deposit|balance|paid\s+in|paid\s+out)\b/.test(labels);
+   if(hasDescription&&hasDate&&hasAmount){
+    headerIndex=i;const items=lines[i].items;dateX=columnX(items,/^(?:(?:value|transaction|posting|booking|entry|effective)\s*)?date$/i);orderX=columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);amountX=columnX(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit)$/i);currencyX=columnX(items,/^currency(?:\s+code)?$/i);debitX=columnX(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i);creditX=columnX(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i);balanceX=columnX(items,/^(?:(?:running|closing|current)\s+)?balance$/i);break;
    }
   }
   if(headerIndex<0)continue;
   foundHeader=true;
-  for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/\bcash\s+accounts?\s+([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
+  for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
   if(dateX===null||descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
   for(const line of lines.slice(headerIndex+1)){
    const rowText=textOf(line);if(!rowText)continue;
-   const subtitleCurrency=rowText.match(/\bcash\s+accounts?\s+([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
+   const subtitleCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
    const sortedX=[currencyX,debitX,creditX,balanceX,amountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b)[0];
    const descEnd=sortedX??(line.items.at(-1)?.x??descriptionX+500)+1;
    const valueEnd=orderX!==null&&orderX>dateX?orderX:descriptionX;
@@ -119,6 +151,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    }
   }
  }
+ if(!allRows.length){const looseRows=extractCashLayoutRows(pages);if(looseRows.length){allRows.push(...looseRows);foundHeader=true}}
  if(!foundHeader)return null;
  const datedTransactions=allRows.filter(row=>!row._balanceKind&&typeof row.txn_date==="string"&&row.txn_date).map(row=>String(row.txn_date)).sort();
  const carried=allRows.find(row=>row._balanceKind==="carried");
@@ -134,7 +167,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
  return allRows.map(({_balanceKind,...row})=>row);
 }
 function extractRows(text:string,pages:LayoutLine[][]=[]){
- const tableRows=extractTableRows(pages);if(tableRows!==null)return tableRows;
+ const tableRows=extractTableRows(pages);if(tableRows!==null&&tableRows.length)return tableRows;
  const output=[] as Record<string,unknown>[],seen=new Set<string>();
  const lines=text.replace(/\r/g,"").split("\n").map(s=>s.replace(/\s+/g," ").trim()).filter(Boolean);
  const datePattern=/\b(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g;
@@ -165,7 +198,7 @@ export async function POST(request:Request){
   if(text.trim().length<20)return NextResponse.json({error:"No readable text was found. This PDF may be scanned; OCR is not yet available."},{status:422});
   const transactions=extractRows(text,layout);if(!transactions.length)return NextResponse.json({error:"The PDF text was readable, but no transaction or balance rows were detected. Download a searchable PDF or enter rows manually."},{status:422});
   const dates=transactions.map(x=>String(x.txn_date)).filter(Boolean).sort();const periodMatch=text.match(/(?:statement period|period|from)\s*[:]?\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i);const brought=transactions.find(x=>x.description==="Balance brought forward"),carried=transactions.find(x=>x.description==="Balance carried forward");
-  const sectionCurrency=text.match(/\bCash\s+Accounts?\s+([A-Z]{3})\b/i)?.[1]?.toUpperCase();
+  const sectionCurrency=text.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();
   const currencyCode=sectionCurrency??(/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":/\bAUD\b/i.test(text)?"AUD":/\bSEK\b/i.test(text)?"SEK":/\bUSD\b|US\$\s?\d/i.test(text)?"USD":"USD");
   const normalizedTransactions=transactions.map(row=>({...row,currency_code:row.currency_code??currencyCode}));
   return NextResponse.json({transactions:normalizedTransactions,period_start:periodMatch?parseDate(periodMatch[1]):brought&&brought.txn_date?nextDay(String(brought.txn_date)):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):carried?.txn_date||dates.at(-1),currency_code:currencyCode,pages:transactions.length});
