@@ -41,12 +41,18 @@ function previousMonthEnd(value:string){const date=new Date(`${value}T00:00:00Z`
 function nextDay(value:string){const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+1);return date.toISOString().slice(0,10)}
 function categoryFor(description:string){
  const value=description.toLowerCase();
+ if(/\b(realized gain|realised gain)\b/.test(value))return "income";
  if(/\b(reversal|refund|rebate)\b/.test(value))return "income";
  if(/\b(fee|charged|charge|commission|tax|levy|stamp duty)\b/.test(value))return "expense";
  if(/\b(dividend|interest|coupon|distribution|income)\b/.test(value))return "income";
  if(/\b(transfer|remittance|withdrawal|deposit|payment received|payment sent)\b/.test(value))return "transfer";
- if(/\b(capital call|call notice|subscription|purchase|buy|sale|sell|redemption|investment|fixed deposit|matured)\b/.test(value))return "investment";
+ if(/\b(return of capital|capital return|capital call|call notice|subscription|purchase|buy|sale|sell|redemption|investment|fixed deposit|matured)\b/.test(value))return "investment";
  return "unreviewed";
+}
+function currencyFromAccountLabel(value:string):string|null{
+ const text=value.toLowerCase();
+ const currencies:[RegExp,string][]=[[/\b(?:norwegian\s+krone|nok)\b/i,"NOK"],[/\b(?:japanese\s+yen|jpy)\b/i,"JPY"],[/\b(?:euro|eur)\b/i,"EUR"],[/\b(?:u\.?s\.?\s*dollar|us\s*dollar|usd)\b/i,"USD"],[/\b(?:swedish\s+krona|sek)\b/i,"SEK"],[/\b(?:danish\s+krone|dkk)\b/i,"DKK"],[/\b(?:swiss\s+franc|chf)\b/i,"CHF"],[/\b(?:british\s+pound|pound\s+sterling|gbp)\b/i,"GBP"],[/\b(?:singapore\s+dollar|sgd)\b/i,"SGD"],[/\b(?:australian\s+dollar|aud)\b/i,"AUD"],[/\b(?:canadian\s+dollar|cad)\b/i,"CAD"],[/\b(?:hong\s*kong\s+dollar|hkd)\b/i,"HKD"],[/\b(?:malaysian\s+ringgit|myr)\b/i,"MYR"]];
+ return currencies.find(([pattern])=>pattern.test(text))?.[1]??null;
 }
 function extractCashLayoutRows(pages:LayoutLine[][]):Record<string,unknown>[]{
  const rows:Record<string,unknown>[]=[];let activeCurrency:string|null=null,inCashSection=false;
@@ -104,25 +110,26 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   let headerIndex=-1,dateX:number|null=null,orderX:number|null=null,descriptionX:number|null=null,amountX:number|null=null,currencyX:number|null=null,debitX:number|null=null,creditX:number|null=null,balanceX:number|null=null,forexX:number|null=null,baseAmountX:number|null=null,baseDebitX:number|null=null,baseCreditX:number|null=null,baseBalanceX:number|null=null;
   for(let i=0;i<lines.length;i++){
    const labels=textOf(lines[i]).toLowerCase();
-   const hasDate=/\b(?:value|transaction|posting|booking|entry|effective)?\s*date\b/.test(labels),hasDescription=/\b(?:description|details|narrative|particulars|remarks|reference)\b/.test(labels),hasAmount=/\b(?:amount|debit|credit|withdrawal|deposit|balance|paid\s+in|paid\s+out)\b/.test(labels);
+   const hasDate=/\b(?:value|transaction|posting|booking|entry|effective)?\s*date\b/.test(labels),hasDescription=/\b(?:description|details|narrative|particulars|remarks|reference)\b/.test(labels),hasAmount=/\b(?:amount|debit|credit|credits\s*\/\s*debits|withdrawal|deposit|balance|paid\s+in|paid\s+out)\b/.test(labels);
    if(hasDescription&&hasDate&&hasAmount){
-    headerIndex=i;const items=lines[i].items;dateX=columnX(items,/^(?:(?:value|transaction|posting|booking|entry|effective)\s*)?date$/i);orderX=columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);const amounts=columnXs(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit)$/i),currencies=columnXs(items,/^currency(?:\s+code)?$/i),debits=columnXs(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i),credits=columnXs(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i),balancesFound=columnXs(items,/^(?:(?:running|closing|current)\s+)?balance$/i);amountX=amounts[0]??null;baseAmountX=amounts[1]??null;currencyX=currencies[0]??null;debitX=debits[0]??null;baseDebitX=debits[1]??null;creditX=credits[0]??null;baseCreditX=credits[1]??null;balanceX=balancesFound[0]??null;baseBalanceX=balancesFound[1]??null;forexX=columnX(items,/^(?:forex|fx(?:\s+rate)?|exchange\s+rate)$/i);break;
+    headerIndex=i;const items=lines[i].items;const dates=columnXs(items,/^(?:(?:value|transaction|posting|booking|entry|effective|settlement)\s*)?date$/i);dateX=dates[0]??null;orderX=dates[1]??columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);const amounts=columnXs(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit|credits?\s*\/\s*debits?(?:\s+value)?(?:\s+in\s+[A-Z]{3})?)$/i),currencies=columnXs(items,/^currency(?:\s+code)?$/i),debits=columnXs(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i),credits=columnXs(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i),balancesFound=columnXs(items,/^(?:(?:running|closing|current)\s+)?balance$/i);amountX=amounts[0]??null;baseAmountX=amounts[1]??null;currencyX=currencies[0]??null;debitX=debits[0]??null;baseDebitX=debits[1]??null;creditX=credits[0]??null;baseCreditX=credits[1]??null;balanceX=balancesFound[0]??null;baseBalanceX=balancesFound[1]??null;forexX=columnX(items,/^(?:forex|fx(?:\s+rate)?|exchange\s+rate)$/i);break;
    }
   }
   if(headerIndex<0)continue;
   foundHeader=true;
   for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
-  if(dateX===null||descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
+  if(descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
   for(const line of lines.slice(headerIndex+1)){
    const rowText=textOf(line);if(!rowText)continue;
+   const accountCurrency=currencyFromAccountLabel(rowText);if(accountCurrency)activeCurrency=accountCurrency;
    const subtitleCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
    const sortedX=[currencyX,debitX,creditX,balanceX,amountX,forexX,baseDebitX,baseCreditX,baseBalanceX,baseAmountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b)[0];
    const descEnd=sortedX??(line.items.at(-1)?.x??descriptionX+500)+1;
-   const valueEnd=orderX!==null&&orderX>dateX?orderX:descriptionX;
-   const dateText=line.items.filter(item=>item.x>=dateX!-3&&item.x<valueEnd-2).map(item=>item.text).join(" ").trim();
+   const valueEnd=orderX!==null&&dateX!==null&&orderX>dateX?orderX:descriptionX;
+   const dateText=dateX===null?"":line.items.filter(item=>item.x>=dateX-3&&item.x<valueEnd-2).map(item=>item.text).join(" ").trim();
    const descriptionItems=line.items.filter(item=>item.x>=descriptionX!-3&&item.x<descEnd-2);
    const columnAmount=(x:number|null,nextX:number|null)=>x===null?null:line.items.filter(item=>item.x>=x-4&&(nextX===null||item.x<nextX-2)).map(item=>item.text).join(" ").trim();
-   const amountText=columnAmount(amountX,null);
+   const amountText=columnAmount(amountX,baseAmountX??forexX??baseDebitX??baseCreditX??baseBalanceX);
    const debitText=columnAmount(debitX,creditX??balanceX);
    const creditText=columnAmount(creditX,balanceX);
    const balanceText=columnAmount(balanceX,forexX??baseDebitX??baseCreditX??baseBalanceX??baseAmountX);
@@ -136,12 +143,14 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    if(!description){
     description=rowText;
     for(const match of rowText.matchAll(datePattern))description=description.replace(match[0]," ");
-    const amounts=[...description.matchAll(moneyPattern)];if(amounts.length){const last=amounts.at(-1)!;description=`${description.slice(0,last.index)} ${description.slice((last.index??0)+last[0].length)}`}
+    const amounts=[...description.matchAll(moneyPattern)].reverse();for(const match of amounts)description=`${description.slice(0,match.index)} ${description.slice((match.index??0)+match[0].length)}`
     description=description.replace(/[|,:;]+/g," ").replace(/\s+/g," ").trim();
    }
+   const typeX=columnX(lines[headerIndex].items,/^type$/i),typeText=typeX===null?"":columnAmount(typeX,descriptionX)??"";
    const normalizedDescription=description.toLowerCase();
-   const isOpening=/\b(opening balance|balance brought forward|brought forward|bal(?:ance)?\s+b\/?f)\b/.test(normalizedDescription);
-   const isCarried=/\b(month end balance|closing balance|balance carried forward|carried forward|bal(?:ance)?\s+c\/?f)\b/.test(normalizedDescription);
+   const normalizedType=typeText.toLowerCase();
+   const isOpening=/\b(opening balance|balance brought forward|brought forward|bal(?:ance)?\s+b\/?f)\b/.test(`${normalizedDescription} ${normalizedType}`);
+   const isCarried=/\b(closing balance|month end balance|balance carried forward|carried forward|bal(?:ance)?\s+c\/?f)\b/.test(`${normalizedDescription} ${normalizedType}`);
    const valueDate=parseDate(dateText)||((isOpening||isCarried)?[...description.matchAll(datePattern)].map(match=>parseDate(match[0])).find((value):value is string=>value!==null)??null:null);
    let debit=debitText?Math.abs(parseMoney([...debitText.matchAll(moneyPattern)].at(-1)?.[0])??0):0;
    let credit=creditText?Math.abs(parseMoney([...creditText.matchAll(moneyPattern)].at(-1)?.[0])??0):0;
@@ -150,29 +159,36 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
     const amountMatches=[...rowText.matchAll(moneyPattern)];
     if(amountMatches.length)amount=parseMoney(amountMatches.at(-1)?.[0]);
    }
-   if(debitX!==null||creditX!==null){if(!debit&&!credit&&!(isOpening||isCarried))continue;amount=debit-credit}
+   if(debitX!==null||creditX!==null){if(!debit&&!credit&&!(isOpening||isCarried))continue;amount=debit-credit}else if(amount!==null){debit=amount>0?amount:0;credit=amount<0?Math.abs(amount):0}
    let balance=balanceText?parseMoney([...balanceText.matchAll(moneyPattern)].at(-1)?.[0]):null;
    const exchangeRate=forexText?parseMoney([...forexText.matchAll(moneyPattern)].at(-1)?.[0]):null;
    let baseDebit=baseDebitText?Math.abs(parseMoney([...baseDebitText.matchAll(moneyPattern)].at(-1)?.[0])??0):null;
    let baseCredit=baseCreditText?Math.abs(parseMoney([...baseCreditText.matchAll(moneyPattern)].at(-1)?.[0])??0):null;
    let baseBalance=baseBalanceText?parseMoney([...baseBalanceText.matchAll(moneyPattern)].at(-1)?.[0]):null;
    const baseAmount=baseAmountText?parseMoney([...baseAmountText.matchAll(moneyPattern)].at(-1)?.[0]):null;
-   if(baseAmount!==null){if(isOpening||isCarried)baseBalance=baseAmount;else if(amount!==null&&amount<0)baseCredit=Math.abs(baseAmount);else baseDebit=Math.abs(baseAmount)}
+   if(baseAmount!==null){if(isOpening||isCarried)baseBalance=baseAmount;else if(amount!==null&&amount<0)baseCredit=Math.abs(baseAmount);else if(amount!==null&&amount>0)baseDebit=Math.abs(baseAmount);else if(baseAmount<0)baseCredit=Math.abs(baseAmount);else if(baseAmount>0)baseDebit=baseAmount}
    if((isOpening||isCarried)&&!debit&&!credit&&balance!==null)amount=balance;
    if(amount===null)continue;
    if(isOpening||isCarried){balance??=amount;debit=0;credit=0}
    if(!(isOpening||isCarried)&&!debit&&!credit){if(amount>0)debit=amount;else if(amount<0)credit=Math.abs(amount)}
    const rowCurrency=currencyText?.match(/\b[A-Z]{3}\b/)?.[0]??activeCurrency;
+   if(!description&&typeText&&!/^(?:opening|closing) balance$/i.test(typeText))description=typeText;
+   if(!description&&accountCurrency&&(isOpening||isCarried))description=typeText;
+   if(/^(?:settled transactions|transactions total|total transactions)$/i.test(`${typeText} ${description}`.trim()))continue;
    if(isOpening||isCarried){
     allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:"cash",_balanceKind:isOpening?"opening":"carried"});
-   }else if(valueDate&&description){
-    allRows.push({txn_date:valueDate,description,amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:categoryFor(description)});
+   }else if(description&&((valueDate!==null)||baseAmount!==null||amount!==null)){
+    const category=/\bfx gain\s*\/\s*loss\b/i.test(`${typeText} ${description}`)?((baseAmount??amount??0)<0?"expense":"income"):categoryFor(`${typeText} ${description}`);
+    allRows.push({txn_date:valueDate??"",description,amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category,_needsStatementDate:valueDate===null});
    }
   }
  }
  if(!allRows.length){const looseRows=extractCashLayoutRows(pages);if(looseRows.length){allRows.push(...looseRows);foundHeader=true}}
  if(!foundHeader)return null;
  const datedTransactions=allRows.filter(row=>!row._balanceKind&&typeof row.txn_date==="string"&&row.txn_date).map(row=>String(row.txn_date)).sort();
+ const lastTxnDate=datedTransactions.at(-1)??"";
+ const statementEndDate=lastTxnDate?new Date(Date.UTC(Number(lastTxnDate.slice(0,4)),Number(lastTxnDate.slice(5,7)),0)).toISOString().slice(0,10):"";
+ if(statementEndDate)for(const row of allRows)if(row._needsStatementDate)row.txn_date=statementEndDate;
  const carried=allRows.find(row=>row._balanceKind==="carried");
  if(carried&&(!carried.txn_date||carried.txn_date==="")&&datedTransactions.length){const lastDate=datedTransactions.at(-1)!;carried.txn_date=new Date(Date.UTC(Number(lastDate.slice(0,4)),Number(lastDate.slice(5,7)),0)).toISOString().slice(0,10)}
  const opening=allRows.find(row=>row._balanceKind==="opening");
@@ -183,7 +199,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   if(row._balanceKind==="carried"){const ending=sourceBalance??balances.get(code)??Number(row.amount);row.balance=ending;balances.set(code,ending);continue}
   const prior=balances.get(code);if(prior!==undefined){const calculated=Math.round((prior+Number(row.amount))*100)/100;row.balance=sourceBalance??calculated;balances.set(code,row.balance as number)}
  }
- return allRows.map(({_balanceKind,...row})=>row);
+ return allRows.map(({_balanceKind,_needsStatementDate,...row})=>row);
 }
 function extractRows(text:string,pages:LayoutLine[][]=[]){
  const tableRows=extractTableRows(pages);if(tableRows!==null&&tableRows.length)return tableRows;
@@ -217,8 +233,8 @@ export async function POST(request:Request){
   if(text.trim().length<20)return NextResponse.json({error:"No readable text was found. This PDF may be scanned; OCR is not yet available."},{status:422});
   const transactions=extractRows(text,layout);if(!transactions.length)return NextResponse.json({error:"The PDF text was readable, but no transaction or balance rows were detected. Download a searchable PDF or enter rows manually."},{status:422});
   const dates=transactions.map(x=>String(x.txn_date)).filter(Boolean).sort();const periodMatch=text.match(/(?:statement period|period|from)\s*[:]?\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i);const brought=transactions.find(x=>x.description==="Balance brought forward"),carried=transactions.find(x=>x.description==="Balance carried forward");
-  const sectionCurrency=text.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();
-  const currencyCode=sectionCurrency??(/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":/\bAUD\b/i.test(text)?"AUD":/\bSEK\b/i.test(text)?"SEK":/\bUSD\b|US\$\s?\d/i.test(text)?"USD":"USD");
+  const sectionCurrency=text.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase()??currencyFromAccountLabel(text);
+  const currencyCode=sectionCurrency??(/\bNOK\b|norwegian\s+krone/i.test(text)?"NOK":/\bJPY\b|japanese\s+yen/i.test(text)?"JPY":/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":/\bAUD\b/i.test(text)?"AUD":/\bSEK\b/i.test(text)?"SEK":/\bUSD\b|US\$\s?\d|U\.?S\.?\s*dollar/i.test(text)?"USD":"USD");
   const normalizedTransactions=transactions.map(row=>({...row,currency_code:row.currency_code??currencyCode,base_currency_code:"USD"}));
   return NextResponse.json({transactions:normalizedTransactions,period_start:periodMatch?parseDate(periodMatch[1]):brought&&brought.txn_date?nextDay(String(brought.txn_date)):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):carried?.txn_date||dates.at(-1),currency_code:currencyCode,base_currency_code:"USD",pages:transactions.length});
  }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Unexpected PDF extraction error."},{status:500})}
