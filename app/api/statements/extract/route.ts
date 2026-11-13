@@ -231,15 +231,33 @@ function extractRows(text:string,pages:LayoutLine[][]=[]){
 }
 export async function POST(request:Request){
  try{
-  if(!request.headers.get("content-type")?.includes("multipart/form-data"))return NextResponse.json({error:"Send a PDF statement as multipart form data."},{status:400});
-  const form=await request.formData(),file=form.get("file");if(!(file instanceof File))return NextResponse.json({error:"Upload a PDF statement."},{status:400});
-  if(file.size>20*1024*1024)return NextResponse.json({error:"PDF must be 20 MB or smaller."},{status:413});if(file.type!=="application/pdf"&&!file.name.toLowerCase().endsWith(".pdf"))return NextResponse.json({error:"Only PDF statements are supported."},{status:415});
-  const bytes=Buffer.from(await file.arrayBuffer());if(bytes.subarray(0,5).toString()!=="%PDF-")return NextResponse.json({error:"This file does not appear to be a valid PDF."},{status:400});
-  let text="";
-  let layout:LayoutLine[][]=[];
-  try{const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");const worker=new pdfjs.PDFWorker();await worker.promise;const doc=await pdfjs.getDocument({data:new Uint8Array(bytes),useSystemFonts:true,disableFontFace:true,isEvalSupported:false,worker}).promise;const pages:string[]=[];for(let i=1;i<=doc.numPages;i++){const page=await doc.getPage(i),content=await page.getTextContent();pages.push(content.items.map((item)=>("str" in item?item.str:"")).join(" "));layout.push(layoutLines(content.items))}text=pages.join("\n")}catch(e){return NextResponse.json({error:`Could not read the PDF text layer. It may be a scanned image; OCR is not yet available. ${e instanceof Error?e.message:""}`},{status:422})}
-  if(text.trim().length<20)return NextResponse.json({error:"No readable text was found. This PDF may be scanned; OCR is not yet available."},{status:422});
-  const transactions=extractRows(text,layout);if(!transactions.length)return NextResponse.json({error:"The PDF text was readable, but no transaction or balance rows were detected. Download a searchable PDF or enter rows manually."},{status:422});
+  let text="",layout:LayoutLine[][]=[];
+  if(request.headers.get("content-type")?.includes("application/json")){
+   const body=await request.json() as {pages?:unknown};
+   if(!Array.isArray(body.pages)||body.pages.length>250)return NextResponse.json({error:"Invalid extracted PDF data."},{status:400});
+   layout=body.pages.map((page)=>{
+    if(!Array.isArray(page))throw new Error("Invalid PDF page layout.");
+    return page.slice(0,20_000).flatMap((line)=>{
+     if(!line||typeof line!=="object")return [];
+     const value=line as {y?:unknown;items?:unknown};if(!Array.isArray(value.items))return [];
+     const y=Number(value.y);if(!Number.isFinite(y))return [];
+     const items=value.items.slice(0,2_000).flatMap((item)=>{
+      if(!item||typeof item!=="object")return [];
+      const entry=item as {text?:unknown;x?:unknown;y?:unknown};const x=Number(entry.x),itemY=Number(entry.y);
+      return typeof entry.text==="string"&&entry.text.length<=2_000&&Number.isFinite(x)&&Number.isFinite(itemY)?[{text:entry.text,x,y:itemY}]:[];
+     });
+     return items.length?[{y,items}]:[];
+    });
+   });
+   text=layout.map((page)=>page.map((line)=>line.items.map((item)=>item.text).join(" ")).join("\n")).join("\n");
+  }else if(request.headers.get("content-type")?.includes("multipart/form-data")){
+   const form=await request.formData(),file=form.get("file");if(!(file instanceof File))return NextResponse.json({error:"Upload a PDF statement."},{status:400});
+   if(file.size>20*1024*1024)return NextResponse.json({error:"PDF must be 20 MB or smaller."},{status:413});if(file.type!=="application/pdf"&&!file.name.toLowerCase().endsWith(".pdf"))return NextResponse.json({error:"Only PDF statements are supported."},{status:415});
+   const bytes=Buffer.from(await file.arrayBuffer());if(bytes.subarray(0,5).toString()!=="%PDF-")return NextResponse.json({error:"This file does not appear to be a valid PDF."},{status:400});
+   try{const pdfjs=await import("pdfjs-dist/legacy/build/pdf.mjs");const worker=new pdfjs.PDFWorker();await worker.promise;const doc=await pdfjs.getDocument({data:new Uint8Array(bytes),useSystemFonts:true,disableFontFace:true,isEvalSupported:false,worker}).promise;const pages:string[]=[];for(let i=1;i<=doc.numPages;i++){const page=await doc.getPage(i),content=await page.getTextContent();pages.push(content.items.map((item)=>("str" in item?item.str:"")).join(" "));layout.push(layoutLines(content.items))}text=pages.join("\n")}catch(e){return NextResponse.json({error:`Could not read the PDF text layer. Use the browser OCR flow to process scanned PDFs. ${e instanceof Error?e.message:""}`},{status:422})}
+  }else return NextResponse.json({error:"Send extracted PDF data or a PDF statement."},{status:400});
+  if(text.trim().length<20)return NextResponse.json({error:"No readable text was found. This PDF may be scanned; use the browser OCR flow to read it."},{status:422});
+  const transactions=extractRows(text,layout);if(!transactions.length)return NextResponse.json({error:"No transaction or balance rows were detected. Check that the statement pages are clear and include the cash transaction section."},{status:422});
   const dates=transactions.map(x=>String(x.txn_date)).filter(Boolean).sort();const periodMatch=text.match(/(?:statement period|period|from)\s*[:]?\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4})/i);const brought=transactions.find(x=>x.description==="Balance brought forward"),carried=transactions.find(x=>x.description==="Balance carried forward");
   const sectionCurrency=text.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase()??currencyFromAccountLabel(text);
   const currencyCode=sectionCurrency??(/\bNOK\b|norwegian\s+krone/i.test(text)?"NOK":/\bJPY\b|japanese\s+yen/i.test(text)?"JPY":/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":/\bAUD\b/i.test(text)?"AUD":/\bSEK\b/i.test(text)?"SEK":/\bUSD\b|US\$\s?\d|U\.?S\.?\s*dollar/i.test(text)?"USD":"USD");
