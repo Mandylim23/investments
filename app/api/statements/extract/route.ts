@@ -41,14 +41,18 @@ function previousMonthEnd(value:string){const date=new Date(`${value}T00:00:00Z`
 function nextDay(value:string){const date=new Date(`${value}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+1);return date.toISOString().slice(0,10)}
 function categoryFor(description:string){
  const value=description.toLowerCase();
- if(/\b(realized gain|realised gain)\b/.test(value))return "income";
- if(/\b(reversal|refund|rebate)\b/.test(value))return "income";
- if(/\b(fee|charged|charge|commission|tax|levy|stamp duty)\b/.test(value))return "expense";
- if(/\b(dividend|interest|coupon|distribution|income)\b/.test(value))return "income";
- if(/\b(transfer|remittance|withdrawal|deposit|payment received|payment sent)\b/.test(value))return "transfer";
- if(/\b(return of capital|capital return|capital call|call notice|subscription|purchase|buy|sale|sell|redemption|investment|fixed deposit|matured)\b/.test(value))return "investment";
+ if(/\bfx gain\s*\/\s*loss\b/.test(value))return "FX Gain/Loss";
+ if(/\b(?:tax\s+(?:expense|expenses|payment|withholding|withheld)|withholding\s+tax|tax\s+wh)\b/.test(value))return "Tax WH";
+ if(/\b(?:expenses?\s+(?:and|&)\s+fees(?:\s+payment)?|security\s+charges)\b/.test(value))return "Security charges";
+ if(/\bfees\s+and\s+commissions\b|\b(?:bank\s+charges|bank\s+fees?)\b/.test(value))return "Bank charges";
+ if(/\boutgoing\s+remittance\b/.test(value))return "Expenses";
+ if(/\binterest\b/.test(value))return "Interest";
+ if(/\bdividend\b/.test(value))return "Dividend";
+ if(/\b(?:return\s+of\s+capital|capital\s+return|realized\s+gain|realised\s+gain)\b/.test(value))return "Sales";
+ if(/\b(?:subscription|investments?|purchase|buy)\b/.test(value))return "Buy";
  return "unreviewed";
 }
+function isStatementFooter(value:string){return /\bgst\s*reg(?:istration)?\.?\s*no\b/i.test(value)||/\bregistered\s+for\b.{0,100}\b(?:goods\s*(?:and|&)\s*services\s*tax|gst)\b/i.test(value)||/\bpage\s*(?:\d+\s*)?of\s*(?:\d+)?\b/i.test(value)}
 function currencyFromAccountLabel(value:string):string|null{
  const text=value.toLowerCase();
  const currencies:[RegExp,string][]=[[/\b(?:norwegian\s+krone|nok)\b/i,"NOK"],[/\b(?:japanese\s+yen|jpy)\b/i,"JPY"],[/\b(?:euro|eur)\b/i,"EUR"],[/\b(?:u\.?s\.?\s*dollar|us\s*dollar|usd)\b/i,"USD"],[/\b(?:swedish\s+krona|sek)\b/i,"SEK"],[/\b(?:danish\s+krone|dkk)\b/i,"DKK"],[/\b(?:swiss\s+franc|chf)\b/i,"CHF"],[/\b(?:british\s+pound|pound\s+sterling|gbp)\b/i,"GBP"],[/\b(?:singapore\s+dollar|sgd)\b/i,"SGD"],[/\b(?:australian\s+dollar|aud)\b/i,"AUD"],[/\b(?:canadian\s+dollar|cad)\b/i,"CAD"],[/\b(?:hong\s*kong\s+dollar|hkd)\b/i,"HKD"],[/\b(?:malaysian\s+ringgit|myr)\b/i,"MYR"]];
@@ -59,7 +63,7 @@ function extractCashLayoutRows(pages:LayoutLine[][]):Record<string,unknown>[]{
  const moneyPattern=/\(?-?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2,6})?\)?(?:\s*(?:CR|DR))?/g;
  const datePattern=/\b(?:\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/g;
  for(const lines of pages)for(const line of lines){
-  const rowText=line.items.map(item=>item.text).join(" ").replace(/\s+/g," ").trim();if(!rowText)continue;
+  const rowText=line.items.map(item=>item.text).join(" ").replace(/\s+/g," ").trim();if(!rowText||isStatementFooter(rowText))continue;
   const sectionCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(sectionCurrency)activeCurrency=sectionCurrency;
   if(/\bcash\s+(?:transactions?|accounts?|activity|movements?)\b/i.test(rowText))inCashSection=true;
   if(/\b(?:security|investment|portfolio)\s+(?:transactions?|holdings|activity)\b/i.test(rowText))inCashSection=false;
@@ -120,7 +124,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
   if(descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
   for(const line of lines.slice(headerIndex+1)){
-   const rowText=textOf(line);if(!rowText)continue;
+   const rowText=textOf(line);if(!rowText||isStatementFooter(rowText))continue;
    const accountCurrency=currencyFromAccountLabel(rowText);if(accountCurrency)activeCurrency=accountCurrency;
    const subtitleCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
    const sortedX=[currencyX,debitX,creditX,balanceX,amountX,forexX,baseDebitX,baseCreditX,baseBalanceX,baseAmountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b)[0];
@@ -182,7 +186,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    if(isOpening||isCarried){
     allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRateSource,base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:"cash",_balanceKind:isOpening?"opening":"carried"});
    }else if(description&&((valueDate!==null)||baseAmount!==null||amount!==null)){
-    const category=/\bfx gain\s*\/\s*loss\b/i.test(`${typeText} ${description}`)?((baseAmount??amount??0)<0?"expense":"income"):categoryFor(`${typeText} ${description}`);
+    const category=categoryFor(`${description} ${typeText}`);
     allRows.push({txn_date:valueDate??"",description,amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRateSource,base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category,_needsStatementDate:valueDate===null});
    }
   }
