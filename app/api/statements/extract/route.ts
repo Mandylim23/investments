@@ -112,7 +112,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    const labels=textOf(lines[i]).toLowerCase();
    const hasDate=/\b(?:value|transaction|posting|booking|entry|effective)?\s*date\b/.test(labels),hasDescription=/\b(?:description|details|narrative|particulars|remarks|reference)\b/.test(labels),hasAmount=/\b(?:amount|debit|credit|credits\s*\/\s*debits|withdrawal|deposit|balance|paid\s+in|paid\s+out)\b/.test(labels);
    if(hasDescription&&hasDate&&hasAmount){
-    headerIndex=i;const items=lines[i].items;const dates=columnXs(items,/^(?:(?:value|transaction|posting|booking|entry|effective|settlement)\s*)?date$/i);dateX=dates[0]??null;orderX=dates[1]??columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);const amounts=columnXs(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit|credits?\s*\/\s*debits?(?:\s+value)?(?:\s+in\s+[A-Z]{3})?)$/i),currencies=columnXs(items,/^currency(?:\s+code)?$/i),debits=columnXs(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i),credits=columnXs(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i),balancesFound=columnXs(items,/^(?:(?:running|closing|current)\s+)?balance$/i);amountX=amounts[0]??null;baseAmountX=amounts[1]??null;currencyX=currencies[0]??null;debitX=debits[0]??null;baseDebitX=debits[1]??null;creditX=credits[0]??null;baseCreditX=credits[1]??null;balanceX=balancesFound[0]??null;baseBalanceX=balancesFound[1]??null;forexX=columnX(items,/^(?:forex|fx(?:\s+rate)?|exchange\s+rate)$/i);break;
+    headerIndex=i;const items=lines[i].items;const dates=columnXs(items,/^(?:(?:value|transaction|posting|booking|entry|effective|settlement)\s*)?date$/i);dateX=dates[0]??null;orderX=dates[1]??columnX(items,/^order\s*date$/i);descriptionX=columnX(items,/^(?:transaction\s*)?(?:description|details|narrative|particulars|remarks|reference)$/i);const amounts=columnXs(items,/^(?:amount|transaction\s+amount|transaction\s+value|value|debit\s*\/\s*credit|credits?\s*\/\s*debits?(?:\s+value)?(?:\s+in(?:\s+[A-Z]{3})?)?)$/i),currencies=columnXs(items,/^currency(?:\s+code)?$/i),debits=columnXs(items,/^(?:debit(?:\s+amount)?|withdrawal|paid\s+out|money\s+out)$/i),credits=columnXs(items,/^(?:credit(?:\s+amount)?|deposit|paid\s+in|money\s+in)$/i),balancesFound=columnXs(items,/^(?:(?:running|closing|current)\s+)?balance$/i);amountX=amounts[0]??null;baseAmountX=amounts[1]??null;currencyX=currencies[0]??null;debitX=debits[0]??null;baseDebitX=debits[1]??null;creditX=credits[0]??null;baseCreditX=credits[1]??null;balanceX=balancesFound[0]??null;baseBalanceX=balancesFound[1]??null;forexX=columnX(items,/^(?:forex|fx(?:\s+rate)?|exchange\s+rate)$/i);break;
    }
   }
   if(headerIndex<0)continue;
@@ -161,11 +161,13 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    }
    if(debitX!==null||creditX!==null){if(!debit&&!credit&&!(isOpening||isCarried))continue;amount=debit-credit}else if(amount!==null){debit=amount>0?amount:0;credit=amount<0?Math.abs(amount):0}
    let balance=balanceText?parseMoney([...balanceText.matchAll(moneyPattern)].at(-1)?.[0]):null;
-   const exchangeRate=forexText?parseMoney([...forexText.matchAll(moneyPattern)].at(-1)?.[0]):null;
+   let exchangeRate=forexText?parseMoney([...forexText.matchAll(moneyPattern)].at(-1)?.[0]):null;
    let baseDebit=baseDebitText?Math.abs(parseMoney([...baseDebitText.matchAll(moneyPattern)].at(-1)?.[0])??0):null;
    let baseCredit=baseCreditText?Math.abs(parseMoney([...baseCreditText.matchAll(moneyPattern)].at(-1)?.[0])??0):null;
    let baseBalance=baseBalanceText?parseMoney([...baseBalanceText.matchAll(moneyPattern)].at(-1)?.[0]):null;
    const baseAmount=baseAmountText?parseMoney([...baseAmountText.matchAll(moneyPattern)].at(-1)?.[0]):null;
+   if(exchangeRate===null&&baseAmount!==null&&amount!==null&&amount!==0&&baseAmount!==0)exchangeRate=Math.round(Math.abs(baseAmount/amount)*1_000_000)/1_000_000;
+   const exchangeRateSource=exchangeRate===null?null:forexText?"statement":baseAmount!==null?"calculated":"statement";
    if(baseAmount!==null){if(isOpening||isCarried)baseBalance=baseAmount;else if(amount!==null&&amount<0)baseCredit=Math.abs(baseAmount);else if(amount!==null&&amount>0)baseDebit=Math.abs(baseAmount);else if(baseAmount<0)baseCredit=Math.abs(baseAmount);else if(baseAmount>0)baseDebit=baseAmount}
    if((isOpening||isCarried)&&!debit&&!credit&&balance!==null)amount=balance;
    if(amount===null)continue;
@@ -176,10 +178,10 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    if(!description&&accountCurrency&&(isOpening||isCarried))description=typeText;
    if(/^(?:settled transactions|transactions total|total transactions)$/i.test(`${typeText} ${description}`.trim()))continue;
    if(isOpening||isCarried){
-    allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:"cash",_balanceKind:isOpening?"opening":"carried"});
+    allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRateSource,base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:"cash",_balanceKind:isOpening?"opening":"carried"});
    }else if(description&&((valueDate!==null)||baseAmount!==null||amount!==null)){
     const category=/\bfx gain\s*\/\s*loss\b/i.test(`${typeText} ${description}`)?((baseAmount??amount??0)<0?"expense":"income"):categoryFor(`${typeText} ${description}`);
-    allRows.push({txn_date:valueDate??"",description,amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRate===null?null:"statement",base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category,_needsStatementDate:valueDate===null});
+    allRows.push({txn_date:valueDate??"",description,amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRateSource,base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category,_needsStatementDate:valueDate===null});
    }
   }
  }
