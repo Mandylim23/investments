@@ -123,7 +123,22 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   foundHeader=true;
   for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
   if(descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
-  for(const line of lines.slice(headerIndex+1)){
+  const typeX=columnX(lines[headerIndex].items,/^type$/i);
+  const sortedColumns=[currencyX,debitX,creditX,balanceX,amountX,forexX,baseDebitX,baseCreditX,baseBalanceX,baseAmountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b),numericStart=sortedColumns[0]??descriptionX+500;
+  const rowLines:LayoutLine[]=[];
+  for(const sourceLine of lines.slice(headerIndex+1)){
+   const sourceText=textOf(sourceLine);if(!sourceText||isStatementFooter(sourceText))continue;
+   const sourceAccountCurrency=currencyFromAccountLabel(sourceText),isSection=/^(?:settled\s+transactions|transactions\s+total|total\s+transactions)$/i.test(sourceText.trim());
+   const sourceValueEnd=orderX!==null&&dateX!==null&&orderX>dateX?orderX:descriptionX;
+   const hasBookingDate=dateX!==null&&sourceLine.items.some(item=>item.x>=dateX!-3&&item.x<sourceValueEnd-2&&parseDate(item.text)!==null);
+   const hasAmountInValueColumns=sourceLine.items.some(item=>item.x>=numericStart-4&&parseMoney(item.text)!==null);
+   if(!hasBookingDate&&!hasAmountInValueColumns&&!sourceAccountCurrency&&!isSection&&rowLines.length){
+    const continuation=sourceLine.items.filter(item=>item.x>=descriptionX!-3&&item.x<numericStart-2);
+    if(continuation.length){rowLines.at(-1)!.items.push(...continuation);continue}
+   }
+   rowLines.push({...sourceLine,items:[...sourceLine.items]});
+  }
+  for(const line of rowLines){
    const rowText=textOf(line);if(!rowText||isStatementFooter(rowText))continue;
    const accountCurrency=currencyFromAccountLabel(rowText);if(accountCurrency)activeCurrency=accountCurrency;
    const subtitleCurrency=rowText.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(subtitleCurrency)activeCurrency=subtitleCurrency;
@@ -152,7 +167,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
     const amounts=[...description.matchAll(moneyPattern)].reverse();for(const match of amounts)description=`${description.slice(0,match.index)} ${description.slice((match.index??0)+match[0].length)}`
     description=description.replace(/[|,:;]+/g," ").replace(/\s+/g," ").trim();
    }
-   const typeX=columnX(lines[headerIndex].items,/^type$/i),typeText=typeX===null?"":columnAmount(typeX,descriptionX)??"";
+   const typeText=typeX===null?"":columnAmount(typeX,descriptionX)??"";
    const normalizedDescription=description.toLowerCase();
    const normalizedType=typeText.toLowerCase();
    const isOpening=/\b(opening balance|balance brought forward|brought forward|bal(?:ance)?\s+b\/?f)\b/.test(`${normalizedDescription} ${normalizedType}`);
@@ -182,6 +197,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    const rowCurrency=currencyText?.match(/\b[A-Z]{3}\b/)?.[0]??activeCurrency;
    if(!description&&typeText&&!/^(?:opening|closing) balance$/i.test(typeText))description=typeText;
    if(!description&&accountCurrency&&(isOpening||isCarried))description=typeText;
+   if(typeText&&description&&!description.toLowerCase().startsWith(typeText.toLowerCase()))description=`${typeText} — ${description}`;
    if(/^(?:settled transactions|transactions total|total transactions)$/i.test(`${typeText} ${description}`.trim()))continue;
    if(isOpening||isCarried){
     allRows.push({txn_date:valueDate??"",description:isOpening?"Balance brought forward":"Balance carried forward",amount,debit,credit,balance,currency_code:rowCurrency,exchange_rate:exchangeRate,exchange_rate_source:exchangeRateSource,base_debit:baseDebit,base_credit:baseCredit,base_balance:baseBalance,base_debit_source:baseDebit===null?null:"statement",base_credit_source:baseCredit===null?null:"statement",base_balance_source:baseBalance===null?null:"statement",category:"cash",_balanceKind:isOpening?"opening":"carried"});
