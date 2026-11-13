@@ -123,19 +123,19 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
   foundHeader=true;
   for(const line of lines.slice(0,headerIndex)){const prefixCurrency=textOf(line).match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase();if(prefixCurrency)activeCurrency=prefixCurrency}
   if(descriptionX===null||(amountX===null&&(debitX===null||creditX===null)))continue;
-  const typeX=columnX(lines[headerIndex].items,/^type$/i);
-  const sortedColumns=[currencyX,debitX,creditX,balanceX,amountX,forexX,baseDebitX,baseCreditX,baseBalanceX,baseAmountX].filter((x):x is number=>x!==null&&x>descriptionX!).sort((a,b)=>a-b),numericStart=sortedColumns[0]??descriptionX+500;
+  let typeX=columnX(lines[headerIndex].items,/^type$/i);
+  if(typeX===null){for(let i=Math.max(0,headerIndex-2);i<Math.min(lines.length,headerIndex+3);i++){const candidate=columnX(lines[i].items,/^type$/i);if(candidate!==null&&dateX!==null&&descriptionX!==null&&candidate>dateX&&candidate<descriptionX){typeX=candidate;break}}}
   const rowLines:LayoutLine[]=[];
+  const bookingDateIn=(line:LayoutLine)=>{if(dateX===null)return false;const end=orderX!==null&&orderX>dateX?orderX:descriptionX!;const value=line.items.filter(item=>item.x>=dateX!-3&&item.x<end-2).map(item=>item.text).join(" ");return parseDate(value)!==null};
+  const typeIn=(line:LayoutLine)=>typeX===null?"":line.items.filter(item=>item.x>=typeX!-4&&item.x<descriptionX!-2).map(item=>item.text).join(" ").replace(/\s+/g," ").trim();
+  const containsBalanceLabel=(value:string)=>/\b(?:opening balance|closing balance|month end balance|balance brought forward|brought forward|balance carried forward|carried forward|bal(?:ance)?\s+[bc]\/f)\b/i.test(value);
   for(const sourceLine of lines.slice(headerIndex+1)){
    const sourceText=textOf(sourceLine);if(!sourceText||isStatementFooter(sourceText))continue;
    const sourceAccountCurrency=currencyFromAccountLabel(sourceText),isSection=/^(?:settled\s+transactions|transactions\s+total|total\s+transactions)$/i.test(sourceText.trim());
-   const sourceValueEnd=orderX!==null&&dateX!==null&&orderX>dateX?orderX:descriptionX;
-   const hasBookingDate=dateX!==null&&sourceLine.items.some(item=>item.x>=dateX!-3&&item.x<sourceValueEnd-2&&parseDate(item.text)!==null);
-   const hasAmountInValueColumns=sourceLine.items.some(item=>item.x>=numericStart-4&&parseMoney(item.text)!==null);
-   if(!hasBookingDate&&!hasAmountInValueColumns&&!sourceAccountCurrency&&!isSection&&rowLines.length){
-    const continuation=sourceLine.items.filter(item=>item.x>=descriptionX!-3&&item.x<numericStart-2);
-    if(continuation.length){rowLines.at(-1)!.items.push(...continuation);continue}
-   }
+   const hasBookingDate=bookingDateIn(sourceLine),sourceType=typeIn(sourceLine),currentGroup=rowLines.at(-1),groupHasDate=currentGroup?bookingDateIn(currentGroup):false,groupHasType=currentGroup?Boolean(typeIn(currentGroup)):false;
+   const startsNewGroup=!currentGroup||Boolean(sourceAccountCurrency)||isSection||containsBalanceLabel(sourceText)||(hasBookingDate&&groupHasDate)||(Boolean(sourceType)&&groupHasType&&!groupHasDate);
+   if(startsNewGroup){rowLines.push({...sourceLine,items:[...sourceLine.items]});continue}
+   if(sourceLine.items.length){currentGroup!.items.push(...sourceLine.items);continue}
    rowLines.push({...sourceLine,items:[...sourceLine.items]});
   }
   for(const line of rowLines){
