@@ -129,7 +129,9 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    const dateText=dateX===null?"":line.items.filter(item=>item.x>=dateX-3&&item.x<valueEnd-2).map(item=>item.text).join(" ").trim();
    const descriptionItems=line.items.filter(item=>item.x>=descriptionX!-3&&item.x<descEnd-2);
    const columnAmount=(x:number|null,nextX:number|null)=>x===null?null:line.items.filter(item=>item.x>=x-4&&(nextX===null||item.x<nextX-2)).map(item=>item.text).join(" ").trim();
-   const amountText=columnAmount(amountX,baseAmountX??forexX??baseDebitX??baseCreditX??baseBalanceX);
+   let rowBaseAmountX=baseAmountX;
+   if(rowBaseAmountX===null&&amountX!==null&&debitX===null&&creditX===null){const numericPositions=line.items.filter(item=>item.x>=amountX!-4&&parseMoney(item.text)!==null).map(item=>item.x).sort((a,b)=>a-b),separated:number[]=[];for(const x of numericPositions)if(!separated.length||x-separated.at(-1)!>40)separated.push(x);if(separated.length>=2)rowBaseAmountX=separated.at(-1)!}
+   const amountText=columnAmount(amountX,rowBaseAmountX??forexX??baseDebitX??baseCreditX??baseBalanceX);
    const debitText=columnAmount(debitX,creditX??balanceX);
    const creditText=columnAmount(creditX,balanceX);
    const balanceText=columnAmount(balanceX,forexX??baseDebitX??baseCreditX??baseBalanceX??baseAmountX);
@@ -137,7 +139,7 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
    const baseDebitText=columnAmount(baseDebitX,baseCreditX??baseBalanceX);
    const baseCreditText=columnAmount(baseCreditX,baseBalanceX);
    const baseBalanceText=columnAmount(baseBalanceX,baseAmountX);
-   const baseAmountText=columnAmount(baseAmountX,null);
+   const baseAmountText=columnAmount(rowBaseAmountX,null);
    const currencyText=columnAmount(currencyX,debitX??creditX??balanceX);
    let description=descriptionItems.map(item=>item.text).join(" ").replace(/\s+/g," ").trim();
    if(!description){
