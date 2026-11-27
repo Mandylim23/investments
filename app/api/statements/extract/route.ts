@@ -209,6 +209,18 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
  }
  if(!allRows.length){const looseRows=extractCashLayoutRows(pages);if(looseRows.length){allRows.push(...looseRows);foundHeader=true}}
  if(!foundHeader)return null;
+ const maturityRange=/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\s*[-–]\s*\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/i;
+ for(let index=1;index<allRows.length;){
+  const row=allRows[index],description=String(row.description??""),year=description.match(/(\d{4})\s*$/)?.[1],amount=Number(row.amount),previous=allRows[index-1];
+  const isOrphanMaturityDate=row._needsStatementDate===true&&maturityRange.test(description)&&year!==undefined&&Math.abs(Math.abs(amount)-Number(year))<0.005;
+  if(isOrphanMaturityDate&&previous&&!previous._balanceKind&&String(previous.currency_code??"")===String(row.currency_code??"")){
+   const previousDescription=String(previous.description??""),previousFields=previous.extracted_fields&&typeof previous.extracted_fields==="object"?previous.extracted_fields as Record<string,unknown>:{},statementType=typeof previousFields.statement_type==="string"?previousFields.statement_type.trim():"",normalizedPrevious=previousDescription.toLowerCase(),normalizedType=statementType.toLowerCase();
+   const typedDescription=statementType&&normalizedPrevious!==normalizedType&&!normalizedPrevious.startsWith(`${normalizedType} —`)&&!normalizedPrevious.startsWith(`${normalizedType} -`)?`${statementType} — ${previousDescription}`:previousDescription;
+   previous.description=previousDescription.toLowerCase().includes(description.toLowerCase())?typedDescription:`${typedDescription} ${description}`.trim();
+   allRows.splice(index,1);continue;
+  }
+  index++;
+ }
  const datedTransactions=allRows.filter(row=>!row._balanceKind&&typeof row.txn_date==="string"&&row.txn_date).map(row=>String(row.txn_date)).sort();
  const lastTxnDate=datedTransactions.at(-1)??"";
  const statementEndDate=lastTxnDate?new Date(Date.UTC(Number(lastTxnDate.slice(0,4)),Number(lastTxnDate.slice(5,7)),0)).toISOString().slice(0,10):"";
@@ -278,6 +290,6 @@ export async function POST(request:Request){
   const sectionCurrency=text.match(/(?:cash\s+(?:accounts?|transactions?|activity|movements?)|account\s+currency|currency(?:\s+code)?)\s*(?:in\s+)?[:(\-]*\s*([A-Z]{3})\b/i)?.[1]?.toUpperCase()??currencyFromAccountLabel(text);
   const currencyCode=sectionCurrency??(/\bNOK\b|norwegian\s+krone/i.test(text)?"NOK":/\bJPY\b|japanese\s+yen/i.test(text)?"JPY":/\bMYR\b|RM\s?\d/i.test(text)?"MYR":/\bSGD\b|S\$\s?\d/i.test(text)?"SGD":/\bGBP\b|£\s?\d/i.test(text)?"GBP":/\bEUR\b|€\s?\d/i.test(text)?"EUR":/\bAUD\b/i.test(text)?"AUD":/\bSEK\b/i.test(text)?"SEK":/\bUSD\b|US\$\s?\d|U\.?S\.?\s*dollar/i.test(text)?"USD":"USD");
   const normalizedTransactions=transactions.map(row=>({...row,currency_code:row.currency_code??currencyCode,base_currency_code:"USD"}));
-  return NextResponse.json({transactions:normalizedTransactions,period_start:periodMatch?parseDate(periodMatch[1]):brought&&brought.txn_date?nextDay(String(brought.txn_date)):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):carried?.txn_date||dates.at(-1),currency_code:currencyCode,base_currency_code:"USD",pages:transactions.length,parser_version:"split-row-v3"});
+  return NextResponse.json({transactions:normalizedTransactions,period_start:periodMatch?parseDate(periodMatch[1]):brought&&brought.txn_date?nextDay(String(brought.txn_date)):dates[0],period_end:periodMatch?parseDate(periodMatch[2]):carried?.txn_date||dates.at(-1),currency_code:currencyCode,base_currency_code:"USD",pages:transactions.length,parser_version:"split-row-v4"});
  }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Unexpected PDF extraction error."},{status:500})}
 }
