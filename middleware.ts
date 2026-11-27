@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
-const isProtected=(pathname:string)=>pathname==="/"||pathname.startsWith("/api/statements");
 export async function middleware(request:NextRequest){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,anonKey=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
  if(!url||!anonKey)return NextResponse.next();
@@ -16,9 +15,8 @@ export async function middleware(request:NextRequest){
    },
   }});
   const {data:{user}}=await supabase.auth.getUser();
-  if(isProtected(request.nextUrl.pathname)&&!user){const target=request.nextUrl.clone();target.pathname="/auth/sign-in";target.searchParams.set("next",request.nextUrl.pathname);return NextResponse.redirect(target)}
-  if(request.nextUrl.pathname==="/auth/sign-in"&&user){const target=request.nextUrl.clone();target.pathname="/";target.search="";return NextResponse.redirect(target)}
+  if(!user){const target=request.nextUrl.clone();target.pathname="/auth/sign-in";target.searchParams.set("next",request.nextUrl.pathname);return NextResponse.redirect(target)}
  }catch{return response}
  return response;
 }
-export const config={matcher:["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"]};
+export const config={matcher:["/api/statements/:path*"]};
