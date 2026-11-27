@@ -231,8 +231,8 @@ function extractTableRows(pages:LayoutLine[][]):Record<string,unknown>[]|null{
  if(opening&&(!opening.txn_date||opening.txn_date==="")){const carriedDate=typeof carried?.txn_date==="string"&&carried.txn_date?carried.txn_date:null;const firstDate=datedTransactions[0];const inferred=carriedDate?previousMonthEnd(carriedDate):firstDate?previousMonthEnd(firstDate):null;if(inferred)opening.txn_date=inferred}
  const balances=new Map<string,number>();
  for(const row of allRows){const code=typeof row.currency_code==="string"?row.currency_code:"USD";const sourceBalance=typeof row.balance==="number"?row.balance:null;
-  if(row._balanceKind==="opening"){balances.set(code,sourceBalance??Number(row.amount));continue}
-  if(row._balanceKind==="carried"){const ending=sourceBalance??balances.get(code)??Number(row.amount);row.balance=ending;balances.set(code,ending);continue}
+    if(row._balanceKind==="opening"){const opening=sourceBalance??Number(row.amount);row.amount=opening;row.balance=opening;balances.set(code,opening);continue}
+  if(row._balanceKind==="carried"){const ending=sourceBalance??Number(row.amount);row.amount=ending;row.balance=ending;balances.set(code,ending);continue}
   const prior=balances.get(code);if(prior!==undefined){const calculated=Math.round((prior+Number(row.amount))*100)/100;row.balance=sourceBalance??calculated;balances.set(code,row.balance as number)}
  }
  return allRows.map(({_balanceKind,_needsStatementDate,...row})=>row);
